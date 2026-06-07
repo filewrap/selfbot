@@ -22,3 +22,8 @@ package = true
 
 [tool.uv.sources]
 telethon = { git = "https://codeberg.org/Lonami/Telethon", rev = "v1" }
+
+[dependency-groups]
+dev = [
+    "pytest>=9.0.3",
+]
