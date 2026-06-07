@@ -17,6 +17,7 @@ from telethon.types import (
     PeerChannel,
     PeerChat,
     PeerUser,
+    UpdateBotBusinessConnect,
     UpdateBotGuestChatQuery,
     UpdateBotNewBusinessMessage,
     UpdateBusinessBotCallbackQuery,
@@ -27,12 +28,14 @@ from telethon.types import (
 from config import config
 
 from .execute import execute
+from .commands import process_command
 
 
 @register(
     Raw(
         (
-            UpdateBotGuestChatQuery,
+            UpdateBotBusinessConnect,
+    UpdateBotGuestChatQuery,
             UpdateBotNewBusinessMessage,
             UpdateBusinessBotCallbackQuery,
             UpdateChannelParticipant,
@@ -42,7 +45,8 @@ from .execute import execute
 )
 async def updates(
     update: (
-        UpdateBotGuestChatQuery
+        UpdateBotBusinessConnect
+        | UpdateBotGuestChatQuery
         | UpdateBotNewBusinessMessage
         | UpdateBusinessBotCallbackQuery
         | UpdateChannelParticipant
@@ -58,6 +62,11 @@ async def updates(
         f"fixed user_id: {_client.user_id}\n")
 
     match update:
+        # Secretary bot notification
+        case UpdateBotBusinessConnect(
+            connection=connection
+        ):
+            logging.info(f"Bot was added as a secretary bot! Connection ID: {connection.connection_id}")
         # Guest Chat Query - works in ANY chat type (PMs, groups, channels)
         case UpdateBotGuestChatQuery(
             message=Message(
@@ -91,6 +100,18 @@ async def updates(
                     f"tg://openmessage?user_id={user_id}&message_id={reply_to_message_id}",
                 ),
             )
+
+        # Business: Handle custom commands
+        case UpdateBotNewBusinessMessage(
+            message=Message(
+                id=message_id,
+                message=str(message),
+                from_id=PeerUser(user_id=_client._client.user_id),
+            ),
+            reply_to_message=reply_to_message
+        ) if message and message.startswith("?"):
+            res = await process_command(update, message, reply_to_message)
+            await update.respond(res, reply_to=message_id)
 
         # Business: Execute command ending with #
         case UpdateBotNewBusinessMessage(
