@@ -14,12 +14,11 @@ from telethon.types import (
     MessageEntityPre,
     MessageMediaDocument,
     MessageMediaPhoto,
-    PeerChannel,
-    PeerChat,
     PeerUser,
     UpdateBotGuestChatQuery,
     UpdateBotNewBusinessMessage,
     UpdateBusinessBotCallbackQuery,
+    UpdateBotInlineQuery,
     UpdateChannelParticipant,
     UpdateInlineBotCallbackQuery,
 )
@@ -59,10 +58,9 @@ async def updates(
 
     match update:
         # Guest Chat Query - works in ANY chat type (PMs, groups, channels)
-        case UpdateBotGuestChatQuery(
-            message=Message(
-                from_id=PeerUser(user_id=_client._client.user_id),
-            )
+        case UpdateBotGuestChatQuery() as query if (
+            getattr(getattr(query.message, "from_id", None), "user_id", None) == _client._client.user_id
+            or getattr(query.message, "from_id", None) is None
         ):
             msg_id = await update.answer(
                 "article",
@@ -91,6 +89,52 @@ async def updates(
                     f"tg://openmessage?user_id={user_id}&message_id={reply_to_message_id}",
                 ),
             )
+
+
+        # Commands: ?info, ?updatepfp, ?help
+        case UpdateBotNewBusinessMessage(
+            message=Message(
+                id=message_id,
+                message=str(message),
+                from_id=PeerUser(user_id=_client._client.user_id),
+            )
+        ) if message and message.startswith("?"):
+            cmd_parts = message.split(maxsplit=1)
+            cmd = cmd_parts[0][1:].lower()
+
+            if cmd == "info":
+                await _client.delete_messages(update.message.peer_id, [message_id])
+                try:
+                    bot_entity = await _client._client.get_input_entity(_client.user_id)
+                    results = await _client._client.inline_query(bot_entity, "info")
+                    if results:
+                        await results[0].click(update.message.peer_id)
+                except Exception:
+                    await _client.send_message(
+                        update.message.peer_id,
+                        "Info:",
+                        buttons=[Button.inline("Hide", b"0")]
+                    )
+
+            elif cmd == "updatepfp":
+                if update.reply_to_message and update.reply_to_message.media:
+                    try:
+                        file = await _client.download_media(update.reply_to_message.media, file=bytes)
+                        if file:
+                            from telethon.functions.photos import UploadProfilePhotoRequest
+                            uploaded = await _client._client.upload_file(file, file_name="photo.jpg")
+                            await _client._client(UploadProfilePhotoRequest(file=uploaded))
+                    except Exception as e:
+                        await update.respond(f"Error executing updatepfp: {e}")
+                await _client.delete_messages(update.message.peer_id, [message_id])
+
+            elif cmd == "help":
+                await _client.delete_messages(update.message.peer_id, [message_id])
+                entities = [MessageEntityPre(0, 10, "python")]
+                text = "Help Menu\n\n- ?info: Gets info via inline query.\n- ?updatepfp: Updates profile photo from replied media.\n- ?help: Shows this menu."
+                buttons = [[Button.inline("Delete", b"0"), Button.inline("Hide", b"0")]]
+                await update.respond(text, formatting_entities=entities, buttons=buttons)
+
 
         # Business: Execute command ending with #
         case UpdateBotNewBusinessMessage(
@@ -135,6 +179,38 @@ async def updates(
             await _client(
                 channels.EditBannedRequest(*args, ChatBannedRights(until_date=None))
             )
+
+
+        case UpdateBotInlineQuery(query=str(q)) if q == "info":
+            from telethon.tl.types import InputBotInlineResult, InputBotInlineMessageText, ReplyInlineMarkup, KeyboardButtonCallback, KeyboardButtonRow
+            from telethon.functions.messages import SetInlineBotResultsRequest
+            import random
+
+            # send back a result
+            result = InputBotInlineResult(
+                id=str(random.randint(0, 1000000)),
+                type="article",
+                title="Info",
+                send_message=InputBotInlineMessageText(
+                    message="Information about the bot/user...",
+                    no_webpage=True,
+                    reply_markup=ReplyInlineMarkup(
+                        rows=[
+                            KeyboardButtonRow(
+                                buttons=[
+                                    KeyboardButtonCallback(text="Delete", data=b"0"),
+                                    KeyboardButtonCallback(text="Hide", data=b"0")
+                                ]
+                            )
+                        ]
+                    )
+                )
+            )
+            await _client(SetInlineBotResultsRequest(
+                query_id=update.query_id,
+                results=[result],
+                cache_time=0
+            ))
 
         # Inline callback: "Raise" (cancel running task) or "Hide" (delete message)
         case UpdateInlineBotCallbackQuery(
