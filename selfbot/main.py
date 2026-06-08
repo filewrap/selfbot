@@ -19,6 +19,7 @@ from telethon.types import (
 )
 
 from config import config
+from .logger import setup_async_logger
 
 from .modules import modules
 
@@ -96,6 +97,7 @@ async def _main() -> None:
 
         me = await bot.get_me()
         bot.user_id = me.id
+        setup_async_logger(app, config.log_channel)
         bot.username = re.compile(rf"(?i)^@{me.username}\s*")
         bot._bot = bot
         logging.info("Signed in as @%s (id=%s)", me.username, me.id)
