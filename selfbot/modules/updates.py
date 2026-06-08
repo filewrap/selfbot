@@ -14,12 +14,12 @@ from telethon.types import (
     MessageEntityPre,
     MessageMediaDocument,
     MessageMediaPhoto,
-    PeerChannel,
-    PeerChat,
     PeerUser,
+    UpdateBotBusinessConnect,
     UpdateBotGuestChatQuery,
     UpdateBotNewBusinessMessage,
     UpdateBusinessBotCallbackQuery,
+    UpdateBotInlineQuery,
     UpdateChannelParticipant,
     UpdateInlineBotCallbackQuery,
 )
@@ -27,12 +27,14 @@ from telethon.types import (
 from config import config
 
 from .execute import execute
+from .commands import process_command
 
 
 @register(
     Raw(
         (
-            UpdateBotGuestChatQuery,
+            UpdateBotBusinessConnect,
+    UpdateBotGuestChatQuery,
             UpdateBotNewBusinessMessage,
             UpdateBusinessBotCallbackQuery,
             UpdateChannelParticipant,
@@ -42,7 +44,8 @@ from .execute import execute
 )
 async def updates(
     update: (
-        UpdateBotGuestChatQuery
+        UpdateBotBusinessConnect
+        | UpdateBotGuestChatQuery
         | UpdateBotNewBusinessMessage
         | UpdateBusinessBotCallbackQuery
         | UpdateChannelParticipant
@@ -58,11 +61,15 @@ async def updates(
         f"fixed user_id: {_client.user_id}\n")
 
     match update:
+        # Secretary bot notification
+        case UpdateBotBusinessConnect(
+            connection=connection
+        ):
+            logging.info(f"Bot was added as a secretary bot! Connection ID: {connection.connection_id}")
         # Guest Chat Query - works in ANY chat type (PMs, groups, channels)
-        case UpdateBotGuestChatQuery(
-            message=Message(
-                from_id=PeerUser(user_id=_client._client.user_id),
-            )
+        case UpdateBotGuestChatQuery() as query if (
+            getattr(getattr(query.message, "from_id", None), "user_id", None) == _client._client.user_id
+            or getattr(query.message, "from_id", None) is None
         ):
             msg_id = await update.answer(
                 "article",
@@ -91,6 +98,18 @@ async def updates(
                     f"tg://openmessage?user_id={user_id}&message_id={reply_to_message_id}",
                 ),
             )
+
+        # Business: Handle custom commands
+        case UpdateBotNewBusinessMessage(
+            message=Message(
+                id=message_id,
+                message=str(message),
+                from_id=PeerUser(user_id=_client._client.user_id),
+            ),
+            reply_to_message=reply_to_message
+        ) if message and message.startswith("?"):
+            res = await process_command(update, message, reply_to_message)
+            await update.respond(res, reply_to=message_id)
 
         # Business: Execute command ending with #
         case UpdateBotNewBusinessMessage(
@@ -165,6 +184,37 @@ async def updates(
                 await _client.edit_message(
                     msg_id, "\u2060", buttons=Button.switch_inline("Call", "\n", True)
                 )
+
+        case UpdateBotInlineQuery(query=str(q)) if q == "info":
+            from telethon.tl.types import InputBotInlineResult, InputBotInlineMessageText, ReplyInlineMarkup, KeyboardButtonCallback, KeyboardButtonRow
+            from telethon.functions.messages import SetInlineBotResultsRequest
+            import random
+
+            # send back a result
+            result = InputBotInlineResult(
+                id=str(random.randint(0, 1000000)),
+                type="article",
+                title="Info",
+                send_message=InputBotInlineMessageText(
+                    message="Information about the bot/user...",
+                    no_webpage=True,
+                    reply_markup=ReplyInlineMarkup(
+                        rows=[
+                            KeyboardButtonRow(
+                                buttons=[
+                                    KeyboardButtonCallback(text="Delete", data=b"0"),
+                                    KeyboardButtonCallback(text="Hide", data=b"0")
+                                ]
+                            )
+                        ]
+                    )
+                )
+            )
+            await _client(SetInlineBotResultsRequest(
+                query_id=update.query_id,
+                results=[result],
+                cache_time=0
+            ))
 
         case _:
             logging.info(f"Unhandled update: {update.__class__.__name__}")
